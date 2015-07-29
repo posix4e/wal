@@ -39,6 +39,7 @@ struct Entry {
 /// reject append attempts. Entry length is only bounded by the amount of
 /// available space, and the limits of `usize`. The number of entries is bounded
 /// by the limits of `usize`.
+
 pub struct Segment {
     /// The file containing the entries.
     file: File,
@@ -50,7 +51,7 @@ pub struct Segment {
     index: Vec<Entry>,
 
     /// The last crc value written.
-    crc: u32,
+    crc: u32
 }
 
 impl Segment {
@@ -63,7 +64,11 @@ impl Segment {
                                     .create(false)
                                     .open(file));
         let cap = try!(file.metadata()).len();
-        let mut segment = Segment { file: file, cap: cap, index: Vec::new(), crc: 0};
+        let mut segment = Segment { file: file,
+            cap: cap,
+            index: Vec::new(),
+            crc: 0
+        };
         try!(segment.reindex());
         Ok(segment)
     }
@@ -109,7 +114,12 @@ impl Segment {
         try!(file.set_len(capacity));
         try!(file.write_all(&header));
         try!(file.sync_all());
-        Ok(Segment { file: file, cap: capacity, index: Vec::new(), crc: seed })
+        Ok(Segment {
+            file: file,
+            cap: capacity,
+            index: Vec::new(),
+            crc: seed
+        })
     }
 
     pub fn sync(&mut self) ->Result<()> {
@@ -282,7 +292,7 @@ where R: Read {
                     return Err(Error::new(ErrorKind::Other, "Premature EOF"))
                 }
             },
-            Err(ref e) if e.kind() == ErrorKind::Interrupted => (), // retry 
+            Err(ref e) if e.kind() == ErrorKind::Interrupted => (), // retry
             Err(err) => return Err(err), // retry
         }
     }
@@ -290,11 +300,18 @@ where R: Read {
 }
 
 #[cfg(test)]
+
 mod test {
+    extern crate syncbox;
+    extern crate eventual;
     extern crate tempdir;
 
+    use std::sync::Arc;
+    use std::sync::RwLock;
+    use self::eventual::Async;
     use std::io::Read;
 
+//    use eventual::{background, Future, Async};
     use super::{SEGMENT_HEADER_LEN, Segment, padding};
 
     #[test]
@@ -363,6 +380,40 @@ mod test {
             assert_eq!(entries[index], &buf[..]);
         }
     }
+
+        #[test]
+        fn test_async_entries() {
+            let segment = test_segment(4096).0;
+            let entries: &[&[u8]] = &[b"",
+                                      b"0",
+                                      b"01",
+                                      b"012",
+                                      b"0123",
+                                      b"01234",
+                                      b"012345",
+                                      b"0123456",
+                                      b"01234567",
+                                      b"012345678",
+                                      b"0123456789"];
+
+            let pool = syncbox::ThreadPool::single_thread();
+            let arc_seg = Arc::new(RwLock::new(segment));
+
+            for (index, entry) in entries.iter().enumerate() {
+                let cloned_seg = arc_seg.clone();
+                let cloned_entry = entry.clone();
+                assert_eq!(index, eventual::background(pool.clone(), Box::new(move || {
+                    cloned_seg.write().unwrap().append(cloned_entry)
+                })).await().unwrap().unwrap().unwrap());
+            }
+
+            let mut buf = Vec::new();
+            for index in 0..entries.len() {
+                buf.clear();
+                arc_seg.write().unwrap().read(index).unwrap().read_to_end(&mut buf).unwrap();
+                assert_eq!(entries[index], &buf[..]);
+            }
+        }
 
     #[test]
     fn test_open() {
